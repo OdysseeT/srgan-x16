@@ -21,11 +21,14 @@ class DataLoader():
 
         imgs_hr = []
         imgs_lr = []
-        for img_path in batch_images:
+
+        while len(imgs_hr) < batch_images:
+        #for img_path in batch_images:
 
             if not os.path.isfile("./data/{}_HR/{}".format(self.dataset_name, os.path.basename(img_path))):
+                print("No HR for file {}".format(img_path))
                 continue
-                
+
             img_hr = cv2.imread("{}/{}_HR/{}".format(self.datadir, self.dataset_name, os.path.basename(img_path)))
             img_lr = cv2.imread("{}/{}_LR/{}".format(self.datadir, self.dataset_name, os.path.basename(img_path)))
 

@@ -35,6 +35,13 @@ import numpy as np
 import os, time, os.path
 import tqdm
 import tensorflow as tf
+import cv2
+
+BATCH_SIZE = 1
+EPOCHS = 30000
+CHECKPOINT_PATH = "./saved_model"
+
+
 
 class SRGAN():
     def __init__(self):
@@ -42,7 +49,7 @@ class SRGAN():
         self.channels = 3
         self.lr_height = 64                 # Low resolution height
         self.lr_width = 64                  # Low resolution width
-        self.scale_factor = 16
+        self.scale_factor = 4
         self.lr_shape = (self.lr_height, self.lr_width, self.channels)
         self.hr_height = self.lr_height*self.scale_factor   # High resolution height
         self.hr_width = self.lr_width*self.scale_factor     # High resolution width
@@ -53,9 +60,6 @@ class SRGAN():
 
         strategy = tf.distribute.MirroredStrategy()
 
-        with strategy.scope():
-            optimizer = Adam(0.0002, 0.5)
-
         print('### Number of devices: {}'.format(strategy.num_replicas_in_sync))
 
         # We use a pre-trained VGG19 model to extract image features from the high resolution
@@ -64,7 +68,7 @@ class SRGAN():
         self.vgg = self.build_vgg()
         self.vgg.trainable = False
         self.vgg.compile(loss='mse',
-            optimizer=optimizer,
+            optimizer=Adam(0.0002, 0.5),
             metrics=['accuracy'])
 
         # Configure data loader
@@ -88,8 +92,9 @@ class SRGAN():
         if os.path.isfile("saved_model/discriminator.h5"):
             print("### Loading discriminator model weights")
             self.discriminator.load_weights("saved_model/discriminator.h5")
+        d_optimizer = Adam(0.0002, 0.5)
         self.discriminator.compile(loss='mse',
-            optimizer=optimizer,
+            optimizer=d_optimizer,
             metrics=['accuracy'])
 
         # Build the generator
@@ -118,7 +123,12 @@ class SRGAN():
         self.combined = Model([img_lr, img_hr], [validity, fake_features])
         self.combined.compile(loss=['binary_crossentropy', 'mse'],
                               loss_weights=[1e-3, 1],
-                              optimizer=optimizer)
+                              optimizer=Adam(0.0002, 0.5))
+
+        self.ckpt = tf.train.Checkpoint(generator=self.generator,
+                           discriminator=self.discriminator,
+                           d_optimizer = d_optimizer)
+        self.ckpt_manager = tf.train.CheckpointManager(self.ckpt, CHECKPOINT_PATH, max_to_keep=5)
 
 
     def build_vgg(self):
@@ -146,6 +156,7 @@ class SRGAN():
         #return Model(img, img_features)
         return model
 
+
     def build_generator(self):
 
         def residual_block(layer_input, filters):
@@ -164,6 +175,15 @@ class SRGAN():
             u = Conv2D(256, kernel_size=3, strides=1, padding='same')(u)
             u = Activation('relu')(u)
             return u
+
+        def nb_deconv(lr,hr):
+            base = lr
+            i = 0
+            while base < hr:
+            #for _ in range(hr//lr):
+                base *=2
+                i +=1
+            return i
 
         # Low resolution image input
         img_lr = Input(shape=self.lr_shape)
@@ -185,7 +205,9 @@ class SRGAN():
         # Upsampling
 
         u = deconv2d(c2)
-        for _ in range(3):
+        nb_deconvl = nb_deconv(self.lr_height, self.hr_height)-1
+        print("Nb of deconv layer:", nb_deconvl)
+        for _ in range(nb_deconvl):
             u = deconv2d(u)
         #u1 = deconv2d(c2)
         #u2 = deconv2d(u1)
@@ -236,7 +258,18 @@ class SRGAN():
         tensorboard.set_model(self.generator)
         tensorboard.set_model(self.discriminator)
 
-        for epoch in tqdm.trange(epochs):
+        # Checpoint management
+        start_epoch = 0
+        #print("##### BEFORE", self.discriminator.get_weights())
+        if self.ckpt_manager.latest_checkpoint:
+            start_epoch = int(self.ckpt_manager.latest_checkpoint.split('-')[-1])
+            print("Checkpoint found. Starting at epoch {}".format(start_epoch))
+            # restoring the latest checkpoint in checkpoint_path
+            self.ckpt.restore(self.ckpt_manager.latest_checkpoint)
+
+        #print("##### AFTER", self.discriminator.get_weights())
+
+        for epoch in tqdm.trange(start_epoch, epochs):
 
             # ----------------------
             #  Train Discriminator
@@ -282,16 +315,20 @@ class SRGAN():
             if epoch % sample_interval == 0:
                 self.sample_images(epoch)
 
-            if epoch % 1000 == 0:
+            if epoch % 2000 == 0:
                 # Save models
-                self.generator.save_weights("saved_model/generator-{}.h5".format(epoch))
-                self.discriminator.save_weights("saved_model/discriminator-{}.h5".format(epoch))
+                #self.generator.save_weights("{}/generator-{}.h5".format(CHECKPOINT_PATH, epoch))
+                #self.discriminator.save_weights("{}/discriminator-{}.h5".format(CHECKPOINT_PATH, epoch))
+                ckpt_save_path = self.ckpt_manager.save()
+                print ('Saving checkpoint for epoch {} at {}'.format(epoch+1,
+                                                         ckpt_save_path))
+
 
     def sample_images(self, epoch):
         os.makedirs('images/%s' % self.dataset_name, exist_ok=True)
         r, c = 2, 2
 
-        imgs_hr, imgs_lr = self.data_loader.load_data(batch_size=2, is_testing=True)
+        imgs_hr, imgs_lr = self.data_loader.load_data(batch_size=BATCH_SIZE, is_testing=True)
         fake_hr = self.generator.predict(imgs_lr)
 
         # Rescale images 0 - 1
@@ -305,7 +342,7 @@ class SRGAN():
         cnt = 0
         for row in range(r):
             for col, image in enumerate([fake_hr, imgs_hr]):
-                axs[row, col].imshow(image[row])
+                axs[row, col].imshow(cv2.cvtColor(image[row], cv2.COLOR_BGR2RGB))
                 axs[row, col].set_title(titles[col])
                 axs[row, col].axis('off')
             cnt += 1
@@ -321,4 +358,4 @@ class SRGAN():
 
 if __name__ == '__main__':
     gan = SRGAN()
-    gan.train(epochs=30000, batch_size=1, sample_interval=200)
+    gan.train(epochs=EPOCHS, batch_size=BATCH_SIZE, sample_interval=1000)

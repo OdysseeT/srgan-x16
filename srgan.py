@@ -11,32 +11,30 @@ Instrustion on running the script:
 
 from __future__ import print_function, division
 
-from keras.datasets import mnist
-from keras_contrib.layers.normalization.instancenormalization import InstanceNormalization
-from keras.layers import Input, Dense, Reshape, Flatten, Dropout, Concatenate
-from keras.layers import BatchNormalization, Activation, ZeroPadding2D, Add
-from keras.layers.advanced_activations import PReLU, LeakyReLU
-from keras.layers.convolutional import UpSampling2D, Conv2D
-from keras.applications import VGG19
-from keras.models import Sequential, Model
-from keras.optimizers import Adam
+#from keras.datasets import mnist
+#from keras_contrib.layers.normalization.instancenormalization import InstanceNormalization
+#from keras.layers import Input as kInput
+#from keras.models import Model as kModel
+#from keras.optimizers import Adam as kAdam
+#from keras.applications import VGG19 as kVGG19
+from tensorflow.keras.applications import VGG19
+
+
+from tensorflow.keras.layers import Input
+from tensorflow.keras.layers import Dense, Reshape, Flatten, Dropout, Concatenate
+from tensorflow.keras.layers import BatchNormalization, Activation, Add, LeakyReLU
+#from tensorflow.keras.layers.advanced_activations import LeakyReLU
+from tensorflow.keras.layers import UpSampling2D, Conv2D
+from tensorflow.keras.callbacks import TensorBoard
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
 import datetime
 import matplotlib.pyplot as plt
-import sys
 from data_loader import DataLoader
 import numpy as np
-import os
+import os, time, os.path
 import tqdm
-
-import keras.backend as K
-
-from keras.backend.tensorflow_backend import set_session
 import tensorflow as tf
-config = tf.ConfigProto()
-config.gpu_options.allow_growth = True  # dynamically grow the memory used on the GPU
-config.log_device_placement = True  # to log device placement (on which device the operation ran)
-sess = tf.Session(config=config)
-set_session(sess)  # set this TensorFlow session as the default session for Keras
 
 class SRGAN():
     def __init__(self):
@@ -53,10 +51,16 @@ class SRGAN():
         # Number of residual blocks in the generator
         self.n_residual_blocks = 16
 
-        optimizer = Adam(0.0002, 0.5)
+        strategy = tf.distribute.MirroredStrategy()
+
+        with strategy.scope():
+            optimizer = Adam(0.0002, 0.5)
+
+        print('### Number of devices: {}'.format(strategy.num_replicas_in_sync))
 
         # We use a pre-trained VGG19 model to extract image features from the high resolution
         # and the generated high resolution images and minimize the mse between them
+        #with strategy.scope():
         self.vgg = self.build_vgg()
         self.vgg.trainable = False
         self.vgg.compile(loss='mse',
@@ -79,13 +83,20 @@ class SRGAN():
         self.df = 64
 
         # Build and compile the discriminator
+        #with strategy.scope():
         self.discriminator = self.build_discriminator()
+        if os.path.isfile("saved_model/discriminator.h5"):
+            print("### Loading discriminator model weights")
+            self.discriminator.load_weights("saved_model/discriminator.h5")
         self.discriminator.compile(loss='mse',
             optimizer=optimizer,
             metrics=['accuracy'])
 
         # Build the generator
         self.generator = self.build_generator()
+        if os.path.isfile("saved_model/generator.h5"):
+            print("### Loading generator model weights")
+            self.generator.load_weights("saved_model/generator.h5")
 
         # High res. and low res. images
         img_hr = Input(shape=self.hr_shape)
@@ -103,6 +114,7 @@ class SRGAN():
         # Discriminator determines validity of generated high res. images
         validity = self.discriminator(fake_hr)
 
+        #with strategy.scope():
         self.combined = Model([img_lr, img_hr], [validity, fake_features])
         self.combined.compile(loss=['binary_crossentropy', 'mse'],
                               loss_weights=[1e-3, 1],
@@ -114,17 +126,25 @@ class SRGAN():
         Builds a pre-trained VGG19 model that outputs image features extracted at the
         third block of the model
         """
-        vgg = VGG19(weights="imagenet")
+        tvgg = VGG19(weights="imagenet",include_top=False, input_shape=self.hr_shape)
+        #inputs = tf.keras.Input(shape=self.hr_shape)
+        model = tf.keras.Model(inputs=tvgg.inputs, outputs=tvgg.layers[9].output)
+
+        #vgg = kVGG19(weights="imagenet")
         # Set outputs to outputs of last conv. layer in block 3
         # See architecture at: https://github.com/keras-team/keras/blob/master/keras/applications/vgg19.py
-        vgg.outputs = [vgg.layers[9].output]
+        #print("################################################")
+        #print("####", vgg.layers[9].output)
+        #vgg.outputs = [vgg.layers[9].output]
 
-        img = Input(shape=self.hr_shape)
+        #img = Input(shape=self.hr_shape)
 
         # Extract image features
-        img_features = vgg(img)
+        #img_features = vgg(img)
+        #print("#### img_features ", img_features)
 
-        return Model(img, img_features)
+        #return Model(img, img_features)
+        return model
 
     def build_generator(self):
 
@@ -212,6 +232,10 @@ class SRGAN():
 
         self.data_loader.preprocess()
 
+        tensorboard = TensorBoard(log_dir="logs/".format(time.time()))
+        tensorboard.set_model(self.generator)
+        tensorboard.set_model(self.discriminator)
+
         for epoch in tqdm.trange(epochs):
 
             # ----------------------
@@ -231,6 +255,7 @@ class SRGAN():
             d_loss_real = self.discriminator.train_on_batch(imgs_hr, valid)
             d_loss_fake = self.discriminator.train_on_batch(fake_hr, fake)
             d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
+            print("d_loss:", d_loss)
 
             # ------------------
             #  Train Generator
@@ -247,6 +272,7 @@ class SRGAN():
 
             # Train the generators
             g_loss = self.combined.train_on_batch([imgs_lr, imgs_hr], [valid, image_features])
+            print("g_loss:", g_loss)
 
             elapsed_time = datetime.datetime.now() - start_time
             # Plot the progress
@@ -256,10 +282,10 @@ class SRGAN():
             if epoch % sample_interval == 0:
                 self.sample_images(epoch)
 
-            if epoch % 200 == 0:
+            if epoch % 1000 == 0:
                 # Save models
-                generator.save_weights("saved_model/generator-{}.h5".format(epoch))
-                discriminator.save_weights("saved_model/discriminator-{}.h5".format(epoch))
+                self.generator.save_weights("saved_model/generator-{}.h5".format(epoch))
+                self.discriminator.save_weights("saved_model/discriminator-{}.h5".format(epoch))
 
     def sample_images(self, epoch):
         os.makedirs('images/%s' % self.dataset_name, exist_ok=True)
@@ -295,4 +321,4 @@ class SRGAN():
 
 if __name__ == '__main__':
     gan = SRGAN()
-    gan.train(epochs=30000, batch_size=1, sample_interval=50)
+    gan.train(epochs=30000, batch_size=1, sample_interval=200)

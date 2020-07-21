@@ -49,7 +49,7 @@ class SRGAN():
         self.channels = 3
         self.lr_height = 64                 # Low resolution height
         self.lr_width = 64                  # Low resolution width
-        self.scale_factor = 4
+        self.scale_factor = 16
         self.lr_shape = (self.lr_height, self.lr_width, self.channels)
         self.hr_height = self.lr_height*self.scale_factor   # High resolution height
         self.hr_width = self.lr_width*self.scale_factor     # High resolution width

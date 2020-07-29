@@ -99,9 +99,9 @@ class SRGAN():
 
         # Build the generator
         self.generator = self.build_generator()
-        if os.path.isfile("saved_model/generator.h5"):
-            print("### Loading generator model weights")
-            self.generator.load_weights("saved_model/generator.h5")
+        #if os.path.isfile("saved_model/generator.h5"):
+        #    print("### Loading generator model weights")
+        #    self.generator.load_weights("saved_model/generator.h5")
 
         # High res. and low res. images
         img_hr = Input(shape=self.hr_shape)
@@ -326,9 +326,10 @@ class SRGAN():
 
     def sample_images(self, epoch):
         os.makedirs('images/%s' % self.dataset_name, exist_ok=True)
-        r, c = 2, 2
+        nb_img_to_show = 2
+        r, c = nb_img_to_show, 2
 
-        imgs_hr, imgs_lr = self.data_loader.load_data(batch_size=BATCH_SIZE, is_testing=True)
+        imgs_hr, imgs_lr = self.data_loader.load_data(batch_size=nb_img_to_show, is_testing=True)
         fake_hr = self.generator.predict(imgs_lr)
 
         # Rescale images 0 - 1
@@ -337,24 +338,18 @@ class SRGAN():
         imgs_hr = 0.5 * imgs_hr + 0.5
 
         # Save generated images and the high resolution originals
-        titles = ['Generated', 'Original']
+        titles = ['High Resolution', 'Low Resolution', 'Generated']
         fig, axs = plt.subplots(r, c)
         cnt = 0
         for row in range(r):
-            for col, image in enumerate([fake_hr, imgs_hr]):
+            for col, image in enumerate([imgs_hr, imgs_lr, fake_hr]):
                 axs[row, col].imshow(cv2.cvtColor(image[row], cv2.COLOR_BGR2RGB))
                 axs[row, col].set_title(titles[col])
                 axs[row, col].axis('off')
             cnt += 1
+
         fig.savefig("images/%s/%d.png" % (self.dataset_name, epoch))
         plt.close()
-
-        # Save low resolution images for comparison
-        for i in range(r):
-            fig = plt.figure()
-            plt.imshow(imgs_lr[i])
-            fig.savefig('images/%s/%d_lowres%d.png' % (self.dataset_name, epoch, i))
-            plt.close()
 
 if __name__ == '__main__':
     gan = SRGAN()

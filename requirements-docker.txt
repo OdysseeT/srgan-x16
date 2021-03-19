@@ -26,7 +26,7 @@ networkx==2.2
 numpy==1.16.0
 opencv-python==3.4.5.20
 opt-einsum==3.1.0
-Pillow==5.4.0
+Pillow==8.1.1
 protobuf==3.6.1
 pycrypto==2.6.1
 pygobject==3.26.1

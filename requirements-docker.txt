@@ -35,7 +35,7 @@ python-apt==1.6.4
 python-dateutil==2.7.5
 PyWavelets==1.1.1
 pyxdg==0.25
-PyYAML==3.13
+PyYAML==5.4
 scikit-image==0.17.2
 scipy==1.2.0
 SecretStorage==2.3.1

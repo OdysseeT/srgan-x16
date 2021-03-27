@@ -34,7 +34,7 @@ pyparsing==2.3.0
 python-apt==1.6.4
 python-dateutil==2.7.5
 PyWavelets==1.1.1
-pyxdg==0.25
+pyxdg==0.26
 PyYAML==3.13
 scikit-image==0.17.2
 scipy==1.2.0
